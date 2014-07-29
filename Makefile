@@ -1,38 +1,35 @@
 TOPDIR := $(shell pwd)
 
-NERVES_BR_VERSION = 482757f537bc0364bf765f0da02310b6a48bf06e
+NERVES_BR_VERSION = 2014.05
 NERVES_BR_URL = git://git.buildroot.net/buildroot
-NERVES_BR_CONFIG ?= nerves_bbb_defconfig
 
 # Optional place to download files to so that they don't need
 # to be redownloaded when working a lot with buildroot
 # Try the default directory first and if that doesn't work, use
 # a directory in the Nerves folder..
-DEFAULT_DL_DIR = ~/dl
-NERVES_BR_DL_DIR ?= $(if $(wildcard $(DEFAULT_DL_DIR)), $(DEFAULT_DL_DIR), $(TOPDIR)/dl)
+OLD_DEFAULT_DL_DIR = $(HOME)/dl
+DEFAULT_DL_DIR = $(HOME)/.nerves-cache
+IN_TREE_DL_DIR = $(TOPDIR)/dl
+NERVES_BR_DL_DIR ?= $(if $(wildcard $(DEFAULT_DL_DIR)), $(DEFAULT_DL_DIR), $(if $(wildcard $(OLD_DEFAULT_DL_DIR)), $(OLD_DEFAULT_DL_DIR), $(IN_TREE_DL_DIR)))
 
 MAKE_BR = make -C buildroot BR2_EXTERNAL=$(TOPDIR)
 
 all: br-make
 
 .buildroot-downloaded:
-	echo Downloading Buildroot...
-	mkdir -p $(NERVES_BR_DL_DIR)
-	scripts/clone_or_dnload.sh $(NERVES_BR_URL) $(NERVES_BR_VERSION) $(NERVES_BR_DL_DIR)
+	@echo "Caching downloaded files in $(NERVES_BR_DL_DIR)."
+	@mkdir -p $(NERVES_BR_DL_DIR)
+	@echo "Downloading Buildroot..."
+	@scripts/clone_or_dnload.sh $(NERVES_BR_URL) $(NERVES_BR_VERSION) $(NERVES_BR_DL_DIR)
 
-	touch .buildroot-downloaded
+	@touch .buildroot-downloaded
 
+# Apply our patches that either haven't been submitted or merged upstream yet
 .buildroot-patched: .buildroot-downloaded
-	# Apply patches not yet in upstream buildroot
-	cd buildroot; \
-	for p in `ls ../patches/*.patch` ; do \
-		echo Applying $$p; \
-		patch -p1 < $$p; \
-	done
+	buildroot/support/scripts/apply-patches.sh buildroot patches || exit 1
 	touch .buildroot-patched
 
-	# If there's a user dl directory, symlink it to avoid
-	# the big download
+	# If there's a user dl directory, symlink it to avoid the big download
 	if [ -d $(NERVES_BR_DL_DIR) -a ! -e buildroot/dl ]; then \
 		ln -s $(NERVES_BR_DL_DIR) buildroot/dl; \
 	fi
@@ -49,29 +46,47 @@ update-patches: reset-buildroot .buildroot-patched
 	$(MAKE_BR) $@
 
 buildroot/.config: .buildroot-patched
-	$(MAKE_BR) $(NERVES_BR_CONFIG)
+	@echo
+	@echo 'ERROR: Please choose a Nerves SDK configuration and run'
+	@echo '       "make <platform>_defconfig"'
+	@echo
+	@echo 'Run "make help" or look in the configs directory for options'
+	@false
 
 br-make: buildroot/.config
 	$(MAKE_BR) 
+	@echo
 	@echo SDK is ready to use. Demo images are in buildroot/output/images.
 
 menuconfig: buildroot/.config
 	$(MAKE_BR) menuconfig
 	$(MAKE_BR) savedefconfig
-	@echo !!! Remember to copy buildroot/defconfig to the configs directory to save the new settings.
+	@echo
+	@echo "!!! Important !!!"
+	@echo "1. Remember to copy buildroot/defconfig to the configs directory to save"
+	@echo "   the new settings."
+	@echo "2. Buildroot normally requires you to run 'make clean' and 'make' after"
+	@echo "   changing the configuration. You don't technically have to do this,"
+	@echo "   but if you're new to Buildroot, it's best to be safe."
 
 linux-menuconfig: buildroot/.config
 	$(MAKE_BR) linux-menuconfig
 	$(MAKE_BR) linux-savedefconfig
-	@echo !!! Remember to copy buildroot/output/build/linux-x.y.z/defconfig to boards/.../linux-x.y.config
+	@echo
+	@echo Going to update your boards/.../linux-x.y.config. If you do not have one,
+	@echo you will get an error shortly. You will then have to make one and update,
+	@echo your buildroot configuration to use it.
+	$(MAKE_BR) linux-update-defconfig
 
 busybox-menuconfig: buildroot/.config
 	$(MAKE_BR) busybox-menuconfig
-	@echo !!! Remember to copy buildroot/output/build/busybox-x.y.z/.config to boards/.../busybox-x.y.config
+	@echo
+	@echo Going to update your boards/.../busybox-x.y.config. If you do not have one,
+	@echo you will get an error shortly. You will then have to make one and update
+	@echo your buildroot configuration to use it.
+	$(MAKE_BR) busybox-update-config
 
-clean:
-	$(MAKE_BR) clean
-
+clean: realclean
 distclean: realclean
 realclean:
 	-rm -fr buildroot .buildroot-patched .buildroot-downloaded
@@ -81,18 +96,15 @@ help:
 	@echo '---------------'
 	@echo
 	@echo 'Cleaning:'
-	@echo '  clean				- clean Buildroot directory and config'
-	@echo '  realclean			- Clean up everything'
+	@echo '  clean				- Clean everything - run make xyz_defconfig after this'
 	@echo
 	@echo 'Build:'
-	@echo '  all				- build everything [default target]'
+	@echo '  all				- Build the current configuration'
 	@echo
 	@echo 'Configuration:'
-	@echo '  menuconfig			- run buildroots menuconfig'
-	@echo '  linux-menuconfig		- run menuconfig on the Linux kernel'
+	@echo "  menuconfig			- Run Buildroot's menuconfig"
+	@echo '  linux-menuconfig		- Run menuconfig on the Linux kernel'
 	@echo
 	@echo 'Nerves built-in configs:'
 	@$(foreach b, $(sort $(notdir $(wildcard configs/*_defconfig))), \
 	  printf "  %-29s - Build for %s\\n" $(b) $(b:_defconfig=);)
-	@echo
-	@echo 'Nerves default configuration: $(NERVES_BR_CONFIG)'
